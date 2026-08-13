@@ -6,14 +6,14 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 concurrency:
   group: pages
   cancel-in-progress: true
 jobs:
-  update-data:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,25 +21,13 @@ jobs:
         with:
           python-version: '3.x'
       - run: pip install requests beautifulsoup4
-      - name: Recuperer les places publiques Laurentides
+      - name: Actualiser les disponibilites publiques
         run: python scripts/update_data.py
-      - name: Commit des donnees actualisees
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add data.json
-          git diff --cached --quiet || git commit -m 'chore: actualiser les places publiques'
-          git push || true
-  deploy:
-    needs: update-data
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure GitHub Pages
+      - name: Configurer GitHub Pages
         uses: actions/configure-pages@v5
-      - name: Upload site
+      - name: Publier le site avec les donnees fraiches
         uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
-      - name: Deploy to GitHub Pages
+      - name: Deployer sur GitHub Pages
         uses: actions/deploy-pages@v4
