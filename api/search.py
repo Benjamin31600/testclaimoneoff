@@ -1,74 +1,188 @@
-import json, math, re
+import json
+import math
+import re
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, quote, parse_qs
 from urllib.request import Request, urlopen
 
-UA='Mozilla/5.0 (compatible; RadarPoupon/1.0)'
-OFFICIAL=['https://www.milieufamiliallaurentides.ca/fr/','https://www.milieufamiliallaurentides.ca/fr/trouver-une-place']
+UA = 'Mozilla/5.0 (compatible; RadarPoupon/1.0)'
+OFFICIAL = [
+    'https://www.milieufamiliallaurentides.ca/fr/',
+    'https://www.milieufamiliallaurentides.ca/fr/trouver-une-place',
+]
 
 class Parser(HTMLParser):
-    def __init__(self): super().__init__(); self.links=[]; self.parts=[]; self.href=None
-    def handle_starttag(self,t,a):
-        if t=='a': self.href=dict(a).get('href')
-    def handle_endtag(self,t):
-        if t=='a': self.href=None
-    def handle_data(self,d):
-        s=' '.join(d.split())
-        if s: self.parts.append(s)
-        if self.href and '/membres/' in self.href: self.links.append(self.href)
+    def __init__(self):
+        super().__init__()
+        self.links = []
+        self.parts = []
+        self.href = None
 
-def get(url,timeout=12):
-    r=Request(url,headers={'User-Agent':UA,'Accept-Language':'fr-CA,fr;q=0.9'}); return urlopen(r,timeout=timeout).read().decode('utf-8','ignore')
+    def handle_starttag(self, tag, attrs):
+        if tag == 'a':
+            self.href = dict(attrs).get('href')
 
-def first(p,t):
-    m=re.search(p,t,re.I|re.M); return re.sub(r'\s+',' ',m.group(1)).strip(' |') if m else None
+    def handle_endtag(self, tag):
+        if tag == 'a':
+            self.href = None
 
-def hav(a,b,c,d):
-    R=6371;p=math.pi/180; x=math.sin((c-a)*p/2)**2+math.cos(a*p)*math.cos(c*p)*math.sin((d-b)*p/2)**2; return R*2*math.atan2(math.sqrt(x),math.sqrt(1-x))
+    def handle_data(self, data):
+        text = ' '.join(data.split())
+        if text:
+            self.parts.append(text)
+        if self.href and '/membres/' in self.href:
+            self.links.append(self.href)
 
-def geocode(q):
+
+def get(url, timeout=12):
+    request = Request(url, headers={
+        'User-Agent': UA,
+        'Accept-Language': 'fr-CA,fr;q=0.9',
+    })
+    return urlopen(request, timeout=timeout).read().decode('utf-8', 'ignore')
+
+
+def first(pattern, text):
+    match = re.search(pattern, text, re.I | re.M)
+    return re.sub(r'\s+', ' ', match.group(1)).strip(' |') if match else None
+
+
+def hav(a, b, c, d):
+    radius = 6371
+    p = math.pi / 180
+    x = (math.sin((c-a)*p/2)**2 +
+         math.cos(a*p) * math.cos(c*p) * math.sin((d-b)*p/2)**2)
+    return radius * 2 * math.atan2(math.sqrt(x), math.sqrt(1-x))
+
+
+def geocode(query):
     try:
-        raw=get('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+quote(q),10); x=json.loads(raw); return (float(x[0]['lat']),float(x[0]['lon'])) if x else (None,None)
-    except Exception:return (None,None)
+        raw = get(
+            'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + quote(query),
+            10,
+        )
+        data = json.loads(raw)
+        if data:
+            return float(data[0]['lat']), float(data[0]['lon'])
+    except Exception:
+        pass
+    return None, None
+
 
 def member(url):
-    html=get(url); p=Parser();p.feed(html);t=' | '.join(p.parts)
-    city=first(r'Ville\s*:\s*([^|]+)',t); postal=first(r'Code postal\s*:\s*([A-Z]\d[A-Z]\s?\d[A-Z]\d)',t)
-    if not city:return None
-    inf=first(r'(\d+)\s+places?\s+0-18 mois',t); name=first(r'#\s*([^|]+?)\s+Nombre de place',t) or first(r'^([^|]+?)\s+Nombre de place',t)
-    phone=first(r'Téléphone\s*:\s*([0-9 .()\-]{10,})',t); email=first(r'Courriel\s*:\s*([^ |]+@[^ |]+)',t)
-    avail=first(r'Place\(s\) disponible\(s\) dès\s*:\s*([^|]+)',t); hours=first(r'Heures et jours d[’\']ouverture\s*:\s*([^|]+)',t)
-    lat,lon=geocode((postal or '')+' '+city+', Québec, Canada')
-    return {'name':name or 'Milieu familial','city':city,'postalCode':postal,'phone':phone,'email':email,'subsidized':True,'infantPlaces':int(inf or 0),'availableFrom':avail,'hours':hours,'source':url,'website':url,'lat':lat,'lon':lon}
+    html = get(url)
+    parser = Parser()
+    parser.feed(html)
+    text = ' | '.join(parser.parts)
 
-def handler(req):
-    q=parse_qs(urlparse(req.get('url','')).query)
-    try: lat=float(q.get('lat',[45.748591])[0]); lon=float(q.get('lon',[-74.066237])[0]); radius=float(q.get('radius',[10])[0])
-    except: lat,lon,radius=45.748591,-74.066237,10
-    links=[]
-    for s in OFFICIAL:
+    city = first(r'Ville\s*:\s*([^|]+)', text)
+    postal = first(r'Code postal\s*:\s*([A-Z]\d[A-Z]\s?\d[A-Z]\d)', text)
+    if not city:
+        return None
+
+    infant = first(r'(\d+)\s+places?\s+0-18 mois', text)
+    name = (first(r'#\s*([^|]+?)\s+Nombre de place', text)
+            or first(r'^([^|]+?)\s+Nombre de place', text))
+    phone = first(r'Téléphone\s*:\s*([0-9 .()\-]{10,})', text)
+    email = first(r'Courriel\s*:\s*([^ |]+@[^ |]+)', text)
+    available = first(r'Place\(s\) disponible\(s\) dès\s*:\s*([^|]+)', text)
+    hours = first(r'Heures et jours d[’\']ouverture\s*:\s*([^|]+)', text)
+
+    lat, lon = geocode((postal or '') + ' ' + city + ', Québec, Canada')
+    return {
+        'name': name or 'Milieu familial',
+        'city': city,
+        'postalCode': postal,
+        'address': (postal + ', ' if postal else '') + city,
+        'phone': phone,
+        'email': email,
+        'subsidized': True,
+        'infantPlaces': int(infant or 0),
+        'availableFrom': available,
+        'hours': hours,
+        'source': url,
+        'website': url,
+        'lat': lat,
+        'lon': lon,
+    }
+
+
+def search(lat, lon, radius):
+    links = []
+    for source in OFFICIAL:
         try:
-            p=Parser();p.feed(get(s));
-            for l in p.links:
-                u=urljoin(s,l)
-                if u not in links:links.append(u)
-        except Exception: pass
-    out=[]
-    for u in links:
+            parser = Parser()
+            parser.feed(get(source))
+            for link in parser.links:
+                absolute = urljoin(source, link)
+                if absolute not in links:
+                    links.append(absolute)
+        except Exception:
+            continue
+
+    results = []
+    for url in links:
         try:
-            x=member(u)
-            if x:
-                x['distanceKm']=round(hav(lat,lon,x['lat'],x['lon']),1) if x['lat'] is not None else None
-                if x['distanceKm'] is None or x['distanceKm']<=radius: out.append(x)
-        except Exception: pass
-    out.sort(key=lambda x:x.get('distanceKm',999))
-    seen=set(); clean=[]
-    for x in out:
-        if x['source'] not in seen:seen.add(x['source']);clean.append(x)
-    return {'updatedAt':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),'center':{'lat':lat,'lon':lon},'radiusKm':radius,'providers':clean,'count':len(clean)}
+            provider = member(url)
+            if not provider:
+                continue
+            if provider['lat'] is not None and provider['lon'] is not None:
+                provider['distanceKm'] = round(
+                    hav(lat, lon, provider['lat'], provider['lon']), 1
+                )
+                if provider['distanceKm'] > radius:
+                    continue
+            else:
+                provider['distanceKm'] = None
+            results.append(provider)
+        except Exception:
+            continue
 
-def main(request):
-    data=handler({'url':request.url})
-    return {'statusCode':200,'headers':{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'},'body':json.dumps(data,ensure_ascii=False)}
+    results.sort(key=lambda x: x.get('distanceKm', 999))
+    seen = set()
+    clean = []
+    for provider in results:
+        if provider['source'] not in seen:
+            seen.add(provider['source'])
+            clean.append(provider)
 
-# Vercel Python runtime entrypoint
+    return clean
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            query = parse_qs(urlparse(self.path).query)
+            lat = float(query.get('lat', ['45.748591'])[0])
+            lon = float(query.get('lon', ['-74.066237'])[0])
+            radius = float(query.get('radius', ['10'])[0])
+            radius = max(0.1, min(radius, 50))
+            providers = search(lat, lon, radius)
+            payload = {
+                'ok': True,
+                'updatedAt': datetime.now(timezone.utc).isoformat(),
+                'center': {'lat': lat, 'lon': lon},
+                'radiusKm': radius,
+                'providers': providers,
+                'count': len(providers),
+            }
+            body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store, max-age=0')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            body = json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=False).encode('utf-8')
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
