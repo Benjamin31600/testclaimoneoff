@@ -1,8 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/search.py": { "maxDuration": 30 }
-  },
   "rewrites": [
     { "source": "/api/search", "destination": "/api/search.py" }
   ]
