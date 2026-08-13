@@ -1,33 +1,50 @@
 name: Radar Poupon - mise a jour et publication
+
 on:
   push:
     branches: [main]
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
+
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
+
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: radar-poupon-pages
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - run: pip install requests beautifulsoup4
+
+      - name: Installer les dependances
+        run: pip install requests beautifulsoup4
+
       - name: Actualiser les disponibilites publiques
         run: python scripts/update_data.py
+
       - name: Configurer GitHub Pages
         uses: actions/configure-pages@v5
-      - name: Publier le site avec les donnees fraiches
-        uses: actions/upload-pages-artifact@v3
+
+      - name: Construire l artefact Pages
+        uses: actions/upload-pages-artifact@v4
         with:
           path: '.'
+
       - name: Deployer sur GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
